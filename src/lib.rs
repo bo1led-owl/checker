@@ -8,7 +8,13 @@ struct Args {
     #[arg(id = "BINARY", help = "Path to the executable")]
     pub binary: String,
 
-    #[arg(value_name = "FILE", short, long, default_value = None, help = "Path to the file with test input. If not specified, no input is provided")]
+    #[arg(
+        value_name = "FILE", 
+        short, 
+        long, 
+        default_value = None, 
+        help = "Path to the file with test input. If not specified, no input is provided"
+    )]
     pub input: Option<String>,
 
     #[arg(
@@ -23,6 +29,12 @@ struct Args {
 
 pub struct Checker {
     args: Args,
+}
+
+impl Default for Checker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Checker {
@@ -84,7 +96,7 @@ impl Checker {
 
     fn get_input(&self) -> std::io::Result<Stdio> {
         match &self.args.input {
-            Some(path) => std::fs::File::open(path).map(|f| Stdio::from(f)),
+            Some(path) => std::fs::File::open(path).map(Stdio::from),
             None => Ok(Stdio::null()),
         }
     }
