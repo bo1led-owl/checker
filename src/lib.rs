@@ -90,7 +90,7 @@ impl Checker {
             return Ok(());
         }
 
-        println!("{}tests passed", color::Fg(color::Green));
+        println!("{}Tests passed", color::Fg(color::Green));
         Ok(())
     }
 
