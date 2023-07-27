@@ -8,11 +8,14 @@ struct Args {
     #[arg(id = "BINARY", help = "Path to the executable")]
     pub binary: String,
 
+    #[arg(short, long, help = "Print full output of the executable")]
+    pub full_output: bool,
+
     #[arg(
         value_name = "FILE", 
-        short, 
-        long, 
-        default_value = None, 
+        short,
+        long,
+        default_value = None,
         help = "Path to the file with test input. If not specified, no input is provided"
     )]
     pub input: Option<String>,
@@ -79,6 +82,10 @@ impl Checker {
         let output = output.unwrap();
         let actual_answer = String::from_utf8_lossy(&output.stdout);
         let trimmed_actual_answer = actual_answer.trim();
+
+        if self.args.full_output {
+            println!("Output:\n{}", trimmed_actual_answer);
+        }
 
         if !Self::check_line_count(
             trimmed_correct_answer,
