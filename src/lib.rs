@@ -48,38 +48,33 @@ impl Checker {
     }
 
     pub fn run(&self) -> Result<(), String> {
-        let input = self.get_input();
-
-        if let Err(err) = input {
-            return Err(format!(
+        let input = self.get_input().map_err(|err| {
+            format!(
                 "Error reading test input from {}:\n{}",
                 self.args.answer, err
-            ));
-        }
+            )
+        })?;
 
-        let input = input.unwrap();
+        let correct_answer = std::fs::read_to_string(&self.args.answer)
+            .map_err(|err| {
+                format!(
+                    "Error reading correct answer from {}:\n{}",
+                    self.args.answer, err
+                )
+            })?;
 
-        let correct_answer = std::fs::read_to_string(&self.args.answer);
-        if let Err(err) = correct_answer {
-            return Err(format!(
-                "Error reading correct answer from {}:\n{}",
-                self.args.answer, err
-            ));
-        }
-
-        let correct_answer = correct_answer.unwrap();
         let trimmed_correct_answer = correct_answer.trim();
 
-        let output = Command::new(&self.args.binary).stdin(input).output();
+        let output = Command::new(&self.args.binary)
+            .stdin(input)
+            .output()
+            .map_err(|err| {
+                format!(
+                    "Error reading output of the binary {}:\n{}",
+                    self.args.binary, err
+                )
+            })?;
 
-        if let Err(err) = output {
-            return Err(format!(
-                "Error reading output of the binary {}:\n{}",
-                self.args.binary, err
-            ));
-        }
-
-        let output = output.unwrap();
         let actual_answer = String::from_utf8_lossy(&output.stdout);
         let trimmed_actual_answer = actual_answer.trim();
 
