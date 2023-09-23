@@ -1,32 +1,53 @@
-mod args;
-pub mod error;
-
-use args::Args;
-use error::CheckerError;
-
 use std::{
     fs::File,
+    path::PathBuf,
     process::{Command, Stdio},
 };
 
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use termion::color;
 
+#[derive(Parser)]
 pub struct Checker {
-    args: Args,
+    #[arg(
+        value_name = "COMMAND",
+        short,
+        long,
+        default_value = None,
+        value_parser = clap::builder::NonEmptyStringValueParser::new(),
+        help = "Command to build the solution before tests",
+    )]
+    build_rule: Option<String>,
+
+    #[arg(short, long, help = "Print full output of the solution")]
+    full_output: bool,
+
+    #[arg(
+        value_name = "FILE",
+        short,
+        long,
+        default_value = None,
+        help = "Path to the file with test input"
+    )]
+    input_path: Option<PathBuf>,
+
+    #[arg(id = "ANSWER", help = "Path to the file with correct output")]
+    answer_path: PathBuf,
+
+    #[arg(id = "SOLUTION", help = "Command to run the solution")]
+    solution: String,
 }
 
 impl Default for Checker {
     fn default() -> Self {
-        Self {
-            args: Args::parse(),
-        }
+        Self::parse()
     }
 }
 
 impl Checker {
-    pub fn run(&self) -> Result<(), CheckerError> {
-        let input = self.get_input()?;
+    pub fn run(&self) -> Result<()> {
+        let input = self.create_input_pipe()?;
 
         let correct_answer = self.get_correct_answer()?;
         let trimmed_correct_answer = correct_answer.trim();
@@ -36,117 +57,102 @@ impl Checker {
         let output = self.run_solution(input)?;
         let trimmed_actual_answer = output.trim();
 
-        if self.args.full_output {
+        if self.full_output {
             println!("Output:\n{}", trimmed_actual_answer);
         }
 
-        if !Self::check_line_count(
+        let correct = Self::check_line_count(
             trimmed_correct_answer,
             trimmed_actual_answer,
-        ) || !Self::check_lines(
+        ) && Self::check_lines(
             trimmed_correct_answer,
             trimmed_actual_answer,
-        ) {
-            return Ok(());
-        }
+        );
 
-        println!("{}Tests passed", color::Fg(color::Green));
+        if correct {
+            println!("{}Tests passed", color::Fg(color::Green));
+        }
         Ok(())
     }
 
-    fn get_input(&self) -> Result<Stdio, CheckerError> {
-        let open_stdio = |path| {
-            File::open(path)
-                .map(Stdio::from)
-                .map_err(|err| CheckerError {
-                    error: format!("Error reading test input from {path}:"),
-                    error_description: Some(err.to_string()),
+    fn create_input_pipe(&self) -> Result<Stdio> {
+        match &self.input_path {
+            Some(path) => {
+                File::open(path).map(Stdio::from).with_context(|| {
+                    format!(
+                        "could not read test input from `{}`",
+                        path.display()
+                    )
                 })
-        };
-
-        match &self.args.input {
-            Some(path) => open_stdio(path),
+            }
             None => Ok(Stdio::null()),
         }
     }
 
-    fn get_correct_answer(&self) -> Result<String, CheckerError> {
-        let get_answer = |path| {
-            std::fs::read_to_string(path).map_err(|err| CheckerError {
-                error: format!("Error reading correct answer from {path}:"),
-                error_description: Some(err.to_string()),
-            })
-        };
+    fn get_correct_answer(&self) -> Result<String> {
+        std::fs::read_to_string(&self.answer_path).with_context(|| {
+            format!(
+                "could not read correct answer from `{}`",
+                self.answer_path.display()
+            )
+        })
+    }
 
-        match &self.args.answer {
-            Some(path) => get_answer(path),
-            None => Ok(String::new()),
+    /// Runs the solution and returns its output.
+    fn run_solution(&self, input: Stdio) -> Result<String> {
+        let mut solution = self.solution.split_whitespace();
+        let mut command = Command::new(solution.next().unwrap());
+        let output =
+            command.args(solution).stdin(input).output().with_context(
+                || {
+                    format!(
+                        "could not read output of the solution `{}`",
+                        self.solution
+                    )
+                },
+            )?;
+
+        if !output.status.success() {
+            Err(
+                anyhow!(String::from_utf8_lossy(&output.stderr).into_owned())
+                    .context(format!(
+                        "could not read output of the solution `{}`",
+                        self.solution
+                    )),
+            )
+        } else {
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
     }
 
-    fn run_solution(&self, input: Stdio) -> Result<String, CheckerError> {
-        match Command::new(&self.args.solution_command)
-            .args(&self.args.solution_arguments)
-            .stdin(input)
-            .output()
-        {
-            Ok(output) => {
-                if !output.status.success() {
-                    Err(CheckerError {
-                        error: "Solution didn't exit successfully:".to_string(),
-                        error_description: Some(format!(
-                            "{}\n{}",
-                            &output.status,
-                            String::from_utf8_lossy(&output.stderr)
-                        )),
-                    })
-                } else {
-                    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-                }
-            }
-            Err(err) => Err(CheckerError {
-                error: format!(
-                    "Error reading output of the solution {}:",
-                    self.args.solution_command,
-                ),
-                error_description: Some(err.to_string()),
-            }),
+    /// Runs build rule and checks if it exits successfully
+    fn run_build_rule(&self) -> Result<()> {
+        if self.build_rule.is_none() {
+            return Ok(());
         }
-    }
 
-    fn run_build_rule(&self) -> Result<(), CheckerError> {
-        if let Some(build_rule) = &self.args.build_rule {
+        if let Some(build_rule) = self.build_rule.as_ref() {
             if build_rule.is_empty() {
-                return Err(CheckerError {
-                    error: "Cannot use empty build rule".to_string(),
-                    error_description: None,
-                });
+                return Err(anyhow!("Build rule is empty")
+                    .context("could not execute build rule"));
             }
 
-            let mut build_rule = build_rule.split_whitespace();
-            match Command::new(build_rule.next().unwrap())
-                .args(build_rule)
+            let mut build_rule_splitted = build_rule.split_whitespace();
+            let output = Command::new(build_rule_splitted.next().unwrap())
+                .args(build_rule_splitted)
                 .output()
-            {
-                Ok(output) => {
-                    if !output.status.success() {
-                        return Err(CheckerError {
-                            error: "Build didn't complete successfully:"
-                                .to_string(),
-                            error_description: Some(format!(
-                                "{}\n{}",
-                                &output.status,
-                                String::from_utf8_lossy(&output.stderr),
-                            )),
-                        });
-                    }
-                }
-                Err(err) => {
-                    return Err(CheckerError {
-                        error: "Error running build:".to_string(),
-                        error_description: Some(err.to_string()),
-                    })
-                }
+                .with_context(|| {
+                    format!("could not execute build rule `{}`", build_rule)
+                })?;
+
+            if !output.status.success() {
+                return Err(anyhow!(
+                    String::from_utf8_lossy(&output.stderr).into_owned()
+                )
+                .context(format!(
+                    "could not execute build rule `{}`",
+                    build_rule,
+                )));
             }
         }
 
@@ -159,7 +165,7 @@ impl Checker {
 
         if correct_line_count != actual_line_count {
             println!(
-                "{}Number of lines differs:\n{}expected {}, got {}",
+                "{}Number of lines differs:{} expected {}, got {}",
                 color::Fg(color::Red),
                 color::Fg(color::Reset),
                 correct_line_count,
@@ -172,24 +178,22 @@ impl Checker {
     }
 
     fn check_lines(correct_answer: &str, actual_answer: &str) -> bool {
-        let mut res = true;
+        let mut res = false;
         let mut correct_lines = correct_answer.lines();
 
-        actual_answer.lines().enumerate().for_each(|(i, line)| {
-            // unwrap is safe because the test inly runs if the line count is equal
-            let cur_correct_line =
-                unsafe { correct_lines.next().unwrap_unchecked() };
+        actual_answer.lines().enumerate().for_each(|(i, cur_line)| {
+            let cur_correct_line = correct_lines.next().unwrap();
 
-            if line != cur_correct_line {
-                res = false;
+            if cur_line != cur_correct_line {
                 println!(
-                    "{}Line {} differs:\n{}expected: {}\ngot: {}",
+                    "{}Line {} differs:{} expected {}, got {}",
                     color::Fg(color::Red),
                     i + 1,
                     color::Fg(color::Reset),
                     cur_correct_line,
-                    line
+                    cur_line
                 );
+                res = false;
             }
         });
 

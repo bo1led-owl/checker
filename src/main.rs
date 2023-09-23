@@ -1,7 +1,6 @@
 use checker::Checker;
+use clap::Parser;
 
-fn main() {
-    if let Err(error) = Checker::default().run() {
-        eprintln!("{error}");
-    }
+fn main() -> anyhow::Result<()> {
+    Checker::parse().run()
 }
