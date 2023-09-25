@@ -32,10 +32,10 @@ pub struct Checker {
     )]
     input_path: Option<PathBuf>,
 
-    #[arg(id = "ANSWER", help = "Path to the file with correct output")]
+    #[arg(id = "answer", help = "Path to the file with correct output")]
     answer_path: PathBuf,
 
-    #[arg(id = "SOLUTION", help = "Command to run the solution")]
+    #[arg(id = "solution", help = "Command to run the solution")]
     solution: String,
 }
 
@@ -76,17 +76,11 @@ impl Checker {
     }
 
     fn create_input_pipe(&self) -> Result<Stdio> {
-        match &self.input_path {
-            Some(path) => {
-                File::open(path).map(Stdio::from).with_context(|| {
-                    format!(
-                        "could not read test input from `{}`",
-                        path.display()
-                    )
-                })
-            }
-            None => Ok(Stdio::null()),
-        }
+        self.input_path.as_ref().map_or(Ok(Stdio::null()), |path| {
+            File::open(path).map(Stdio::from).with_context(|| {
+                format!("could not read test input from `{}`", path.display())
+            })
+        })
     }
 
     fn get_correct_answer(&self) -> Result<String> {
@@ -100,63 +94,70 @@ impl Checker {
 
     /// Runs the solution and returns its output.
     fn run_solution(&self, input: Stdio) -> Result<String> {
-        let mut solution = self.solution.split_whitespace();
-        let mut command = Command::new(solution.next().unwrap());
-        let output =
-            command.args(solution).stdin(input).output().with_context(
-                || {
-                    format!(
-                        "could not read output of the solution `{}`",
-                        self.solution
-                    )
-                },
-            )?;
+        let mut solution_splitted = self.solution.split_whitespace();
+        let mut solution_command =
+            Command::new(solution_splitted.next().unwrap());
+        let solution_args = solution_splitted;
 
-        if !output.status.success() {
-            Err(
-                anyhow!(String::from_utf8_lossy(&output.stderr).into_owned())
-                    .context(format!(
-                        "could not read output of the solution `{}`",
-                        self.solution
-                    )),
-            )
+        let solution_output = solution_command
+            .args(solution_args)
+            .stdin(input)
+            .output()
+            .with_context(|| {
+                format!(
+                    "could not read output of the solution `{}`",
+                    self.solution
+                )
+            })?;
+
+        if !solution_output.status.success() {
+            let solution_stderr =
+                String::from_utf8_lossy(&solution_output.stderr).into_owned();
+
+            Err(anyhow!(solution_stderr)).with_context(|| {
+                format!(
+                    "solution `{}` terminated with a non-zero exit code",
+                    self.solution
+                )
+            })
         } else {
-            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+            let output =
+                String::from_utf8_lossy(&solution_output.stdout).into_owned();
+            Ok(output)
         }
     }
 
-    /// Runs build rule and checks if it exits successfully
+    /// Runs build rule and checks if it terminates successfully
     fn run_build_rule(&self) -> Result<()> {
         if self.build_rule.is_none() {
             return Ok(());
         }
 
-        if let Some(build_rule) = self.build_rule.as_ref() {
-            if build_rule.is_empty() {
-                return Err(anyhow!("Build rule is empty")
-                    .context("could not execute build rule"));
-            }
+        let build_rule = self.build_rule.as_ref().unwrap();
 
-            let mut build_rule_splitted = build_rule.split_whitespace();
-            let output = Command::new(build_rule_splitted.next().unwrap())
-                .args(build_rule_splitted)
-                .output()
-                .with_context(|| {
-                    format!("could not execute build rule `{}`", build_rule)
-                })?;
+        let mut build_rule_splitted = build_rule.split_whitespace();
+        let build_rule_command = build_rule_splitted.next().unwrap();
+        let build_rule_args = build_rule_splitted;
 
-            if !output.status.success() {
-                return Err(anyhow!(
-                    String::from_utf8_lossy(&output.stderr).into_owned()
+        let build_rule_output = Command::new(build_rule_command)
+            .args(build_rule_args)
+            .output()
+            .with_context(|| {
+                format!("could not execute build rule `{build_rule}`")
+            })?;
+
+        if !build_rule_output.status.success() {
+            let build_rule_stderr =
+                String::from_utf8_lossy(&build_rule_output.stderr).into_owned();
+
+            Err(anyhow!(build_rule_stderr)).with_context(|| {
+                format!(
+                    "build rule `{build_rule}` terminated with a non-zero exit code",
                 )
-                .context(format!(
-                    "could not execute build rule `{}`",
-                    build_rule,
-                )));
-            }
+            })
+        } else {
+            Ok(())
         }
-
-        Ok(())
     }
 
     fn check_line_count(correct_answer: &str, actual_answer: &str) -> bool {
@@ -165,11 +166,9 @@ impl Checker {
 
         if correct_line_count != actual_line_count {
             println!(
-                "{}Number of lines differs:{} expected {}, got {}",
+                "{}Number of lines differs:{} expected {correct_line_count}, got {actual_line_count}",
                 color::Fg(color::Red),
                 color::Fg(color::Reset),
-                correct_line_count,
-                actual_line_count
             );
             false
         } else {
@@ -178,25 +177,47 @@ impl Checker {
     }
 
     fn check_lines(correct_answer: &str, actual_answer: &str) -> bool {
-        let mut res = false;
+        let mut res = true;
         let mut correct_lines = correct_answer.lines();
 
-        actual_answer.lines().enumerate().for_each(|(i, cur_line)| {
+        for (i, cur_line) in actual_answer.lines().enumerate() {
             let cur_correct_line = correct_lines.next().unwrap();
 
             if cur_line != cur_correct_line {
                 println!(
-                    "{}Line {} differs:{} expected {}, got {}",
+                    "{}Line {} differs:{} expected {cur_correct_line}, got {cur_line}",
                     color::Fg(color::Red),
                     i + 1,
                     color::Fg(color::Reset),
-                    cur_correct_line,
-                    cur_line
                 );
                 res = false;
             }
-        });
+        }
 
         res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_line_count() {
+        let str1 = "1\n2";
+        let str2 = "1\n5";
+        let str3 = "1\n2\n3";
+
+        assert!(Checker::check_line_count(str1, str2));
+        assert!(!Checker::check_line_count(str1, str3));
+    }
+
+    #[test]
+    fn check_lines() {
+        let str1 = "1\n2";
+        let str2 = "1\n55";
+
+        assert!(Checker::check_lines(str1, str1));
+        assert!(!Checker::check_lines(str1, str2));
     }
 }
