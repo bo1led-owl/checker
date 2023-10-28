@@ -11,17 +11,16 @@ use termion::color;
 #[derive(Parser)]
 pub struct Checker {
     #[arg(
-        value_name = "COMMAND",
+        value_name = "FILE",
         short,
         long,
         default_value = None,
-        value_parser = clap::builder::NonEmptyStringValueParser::new(),
-        help = "Command to build the solution before tests",
+        help = "Path to the file with solution output",
     )]
-    build_rule: Option<String>,
+    output_file: Option<PathBuf>,
 
     #[arg(short, long, help = "Print full output of the solution")]
-    full_output: bool,
+    print_output: bool,
 
     #[arg(
         value_name = "FILE",
@@ -30,19 +29,13 @@ pub struct Checker {
         default_value = None,
         help = "Path to the file with test input"
     )]
-    input_path: Option<PathBuf>,
+    input_file: Option<PathBuf>,
 
     #[arg(id = "answer", help = "Path to the file with correct output")]
-    answer_path: PathBuf,
+    answer_file: PathBuf,
 
     #[arg(id = "solution", help = "Command to run the solution")]
-    solution: String,
-}
-
-impl Default for Checker {
-    fn default() -> Self {
-        Self::parse()
-    }
+    solution_command: String,
 }
 
 impl Checker {
@@ -52,12 +45,10 @@ impl Checker {
         let correct_answer = self.get_correct_answer()?;
         let trimmed_correct_answer = correct_answer.trim();
 
-        self.run_build_rule()?;
+        let solution_output = self.run_solution(input)?;
+        let trimmed_actual_answer = solution_output.trim();
 
-        let output = self.run_solution(input)?;
-        let trimmed_actual_answer = output.trim();
-
-        if self.full_output {
+        if self.print_output {
             println!("Output:\n{}", trimmed_actual_answer);
         }
 
@@ -76,7 +67,7 @@ impl Checker {
     }
 
     fn create_input_pipe(&self) -> Result<Stdio> {
-        self.input_path.as_ref().map_or(Ok(Stdio::null()), |path| {
+        self.input_file.as_ref().map_or(Ok(Stdio::null()), |path| {
             File::open(path).map(Stdio::from).with_context(|| {
                 format!("could not read test input from `{}`", path.display())
             })
@@ -84,17 +75,17 @@ impl Checker {
     }
 
     fn get_correct_answer(&self) -> Result<String> {
-        std::fs::read_to_string(&self.answer_path).with_context(|| {
+        std::fs::read_to_string(&self.answer_file).with_context(|| {
             format!(
                 "could not read correct answer from `{}`",
-                self.answer_path.display()
+                self.answer_file.display()
             )
         })
     }
 
     /// Runs the solution and returns its output.
     fn run_solution(&self, input: Stdio) -> Result<String> {
-        let mut solution_splitted = self.solution.split_whitespace();
+        let mut solution_splitted = self.solution_command.split_whitespace();
         let mut solution_command =
             Command::new(solution_splitted.next().unwrap());
         let solution_args = solution_splitted;
@@ -106,57 +97,40 @@ impl Checker {
             .with_context(|| {
                 format!(
                     "could not read output of the solution `{}`",
-                    self.solution
+                    self.solution_command
                 )
             })?;
 
+        let solution_stdout =
+            String::from_utf8_lossy(&solution_output.stdout).into_owned();
         if !solution_output.status.success() {
             let solution_stderr =
-                String::from_utf8_lossy(&solution_output.stderr).into_owned();
+                String::from_utf8_lossy(&solution_output.stderr);
 
-            Err(anyhow!(solution_stderr)).with_context(|| {
+            Err(anyhow!(
+                "Stdout:\n{}\nStderr:\n{}",
+                solution_stdout,
+                solution_stderr
+            ))
+            .with_context(|| {
                 format!(
                     "solution `{}` terminated with a non-zero exit code",
-                    self.solution
+                    self.solution_command
                 )
             })
         } else {
-            let output =
-                String::from_utf8_lossy(&solution_output.stdout).into_owned();
-            Ok(output)
-        }
-    }
-
-    /// Runs build rule and checks if it terminates successfully
-    fn run_build_rule(&self) -> Result<()> {
-        if self.build_rule.is_none() {
-            return Ok(());
-        }
-
-        let build_rule = self.build_rule.as_ref().unwrap();
-
-        let mut build_rule_splitted = build_rule.split_whitespace();
-        let build_rule_command = build_rule_splitted.next().unwrap();
-        let build_rule_args = build_rule_splitted;
-
-        let build_rule_output = Command::new(build_rule_command)
-            .args(build_rule_args)
-            .output()
-            .with_context(|| {
-                format!("could not execute build rule `{build_rule}`")
-            })?;
-
-        if !build_rule_output.status.success() {
-            let build_rule_stderr =
-                String::from_utf8_lossy(&build_rule_output.stderr).into_owned();
-
-            Err(anyhow!(build_rule_stderr)).with_context(|| {
-                format!(
-                    "build rule `{build_rule}` terminated with a non-zero exit code",
-                )
-            })
-        } else {
-            Ok(())
+            if let Some(path) = self.output_file.as_ref() {
+                let output =
+                    std::fs::read_to_string(path).with_context(|| {
+                        format!(
+                            "could not read output of the solution from `{}`",
+                            path.display()
+                        )
+                    })?;
+                Ok(output)
+            } else {
+                Ok(solution_stdout)
+            }
         }
     }
 
