@@ -15,21 +15,21 @@ pub struct Checker {
         short,
         long,
         default_value = None,
-        help = "Path to the file with solution output",
+        help = "Map solution stdin to file"
     )]
-    output_file: Option<PathBuf>,
-
-    #[arg(short, long, help = "Print full output of the solution")]
-    print_output: bool,
+    input_file: Option<PathBuf>,
 
     #[arg(
         value_name = "FILE",
         short,
         long,
         default_value = None,
-        help = "Path to the file with test input"
+        help = "Read solution output from file",
     )]
-    input_file: Option<PathBuf>,
+    output_file: Option<PathBuf>,
+
+    #[arg(short, long, help = "Print full output of the solution")]
+    print_output: bool,
 
     #[arg(id = "answer", help = "Path to the file with correct output")]
     answer_file: PathBuf,
@@ -61,8 +61,13 @@ impl Checker {
         );
 
         if correct {
-            println!("{}Tests passed", color::Fg(color::Green));
+            println!(
+                "{}Tests passed{}",
+                color::Fg(color::Green),
+                color::Fg(color::Reset)
+            );
         }
+
         Ok(())
     }
 
@@ -119,18 +124,17 @@ impl Checker {
                 )
             })
         } else {
-            if let Some(path) = self.output_file.as_ref() {
-                let output =
-                    std::fs::read_to_string(path).with_context(|| {
-                        format!(
-                            "could not read output of the solution from `{}`",
-                            path.display()
-                        )
-                    })?;
-                Ok(output)
+            let output = if let Some(path) = self.output_file.as_ref() {
+                std::fs::read_to_string(path).with_context(|| {
+                    format!(
+                        "could not read output of the solution from `{}`",
+                        path.display()
+                    )
+                })?
             } else {
-                Ok(solution_stdout)
-            }
+                solution_stdout
+            };
+            Ok(output)
         }
     }
 
@@ -157,7 +161,7 @@ impl Checker {
         for (i, cur_line) in actual_answer.lines().enumerate() {
             let cur_correct_line = correct_lines.next().unwrap();
 
-            if cur_line != cur_correct_line {
+            if cur_line.trim() != cur_correct_line.trim() {
                 println!(
                     "{}Line {} differs:{} expected {cur_correct_line}, got {cur_line}",
                     color::Fg(color::Red),
