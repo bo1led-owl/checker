@@ -1,6 +1,6 @@
-use checker::Checker;
 use clap::Parser;
 
 fn main() -> anyhow::Result<()> {
-    Checker::parse().run()
+    let args = checker::Args::parse();
+    checker::run(args)
 }
