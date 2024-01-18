@@ -28,9 +28,6 @@ pub struct Args {
     )]
     output_file: Option<PathBuf>,
 
-    #[arg(short, long, help = "Print full output of the solution")]
-    print_output: bool,
-
     #[arg(id = "answer", help = "Path to the file with correct output")]
     answer_file: PathBuf,
 
@@ -38,8 +35,27 @@ pub struct Args {
     solution_command: String,
 }
 
+#[derive(Debug)]
+enum LineCountCheckResult {
+    Correct,
+    Incorrect { expected: usize, actual: usize },
+}
+
+impl LineCountCheckResult {
+    pub fn is_correct(&self) -> bool {
+        match self {
+            Self::Correct => true,
+            Self::Incorrect { .. } => false,
+        }
+    }
+}
+
+enum CheckResult {
+    Correct,
+    Incorrect(String),
+}
+
 pub fn run(args: Args) -> anyhow::Result<()> {
-    // open the input file as the stdio for the solution
     let solution_stdin = args
         .input_file
         .as_deref()
@@ -83,19 +99,27 @@ pub fn run(args: Args) -> anyhow::Result<()> {
             .with_context(|| "failed to convert solution output to UTF-8")?
     };
 
-    if args.print_output {
-        println!("Solution output:\n{}", trimmed_actual_answer);
+    let line_count_check_result =
+        check_line_count(trimmed_correct_answer, trimmed_actual_answer);
+    if let LineCountCheckResult::Incorrect { expected, actual } =
+        line_count_check_result
+    {
+        println!(
+            "{}Number of lines differs:{} expected {expected}, got {actual}",
+            color::Fg(color::Red),
+            color::Fg(color::Reset),
+        );
     }
 
-    let is_correct =
-        check_line_count(trimmed_correct_answer, trimmed_actual_answer)
-            && check_lines(trimmed_correct_answer, trimmed_actual_answer);
-    if is_correct {
-        println!(
-            "{}Tests passed{}",
-            color::Fg(color::Green),
-            color::Fg(color::Reset)
-        );
+    if line_count_check_result.is_correct() {
+        match check_lines(trimmed_correct_answer, trimmed_actual_answer) {
+            CheckResult::Correct => {
+                println!("The answer is correct",)
+            }
+            CheckResult::Incorrect(message) => {
+                println!("{}", message);
+            }
+        }
     }
 
     Ok(())
@@ -125,7 +149,10 @@ fn trim_filter_non_empty(mut line: &str) -> Option<&str> {
     }
 }
 
-fn check_line_count(correct_answer: &str, actual_answer: &str) -> bool {
+fn check_line_count(
+    correct_answer: &str,
+    actual_answer: &str,
+) -> LineCountCheckResult {
     let correct_line_count = correct_answer
         .lines()
         .filter_map(trim_filter_non_empty)
@@ -137,19 +164,18 @@ fn check_line_count(correct_answer: &str, actual_answer: &str) -> bool {
         .count();
 
     if correct_line_count != actual_line_count {
-        println!(
-                "{}Number of lines differs:{} expected {correct_line_count}, got {actual_line_count}",
-                color::Fg(color::Red),
-                color::Fg(color::Reset),
-            );
-        false
+        LineCountCheckResult::Incorrect {
+            expected: correct_line_count,
+            actual: actual_line_count,
+        }
     } else {
-        true
+        LineCountCheckResult::Correct
     }
 }
 
-fn check_lines(correct_answer: &str, actual_answer: &str) -> bool {
-    let mut res = true;
+fn check_lines(correct_answer: &str, actual_answer: &str) -> CheckResult {
+    let mut message = String::new();
+    let mut correct = true;
     let mut correct_lines =
         correct_answer.lines().filter_map(trim_filter_non_empty);
 
@@ -160,23 +186,55 @@ fn check_lines(correct_answer: &str, actual_answer: &str) -> bool {
     {
         let cur_correct_line = correct_lines.next().unwrap();
 
-        if cur_line != cur_correct_line {
-            println!(
-                    "{}Line {} differs:{} expected {cur_correct_line}, got {cur_line}",
-                    color::Fg(color::Red),
-                    i + 1,
-                    color::Fg(color::Reset),
-                );
-            res = false;
+        if i + 1 < 10 {
+            message.push_str("  ");
+        } else if i + 1 < 100 {
+            message.push(' ');
+        }
+        message.push_str(&format!("{} ", i + 1));
+
+        if cur_line == cur_correct_line {
+            message.push_str(&format!(
+                "{} {} {}\n",
+                color::Bg(color::Green),
+                cur_line,
+                color::Bg(color::Reset)
+            ));
+        } else {
+            correct = false;
+            message.push_str(&format!(
+                "{} {} {} => expected {} {} {}\n",
+                color::Bg(color::Red),
+                cur_line,
+                color::Bg(color::Reset),
+                color::Bg(color::Green),
+                cur_correct_line,
+                color::Bg(color::Reset)
+            ));
         }
     }
 
-    res
+    if correct {
+        CheckResult::Correct
+    } else {
+        // pop the last newline character
+        message.pop();
+        CheckResult::Incorrect(message)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    impl CheckResult {
+        pub fn is_correct(&self) -> bool {
+            match self {
+                Self::Correct => true,
+                Self::Incorrect { .. } => false,
+            }
+        }
+    }
 
     #[test]
     fn line_count() {
@@ -184,8 +242,8 @@ mod tests {
         let str2 = "1\n5";
         let str3 = "1\n2\n3";
 
-        assert!(check_line_count(str1, str2));
-        assert!(!check_line_count(str1, str3));
+        assert!(check_line_count(str1, str2).is_correct());
+        assert!(!check_line_count(str1, str3).is_correct());
     }
 
     #[test]
@@ -193,8 +251,8 @@ mod tests {
         let str1 = "1\n2";
         let str2 = "1\n55";
 
-        assert!(check_lines(str1, str1));
-        assert!(!check_lines(str1, str2));
+        assert!(check_lines(str1, str1).is_correct());
+        assert!(!check_lines(str1, str2).is_correct());
     }
 
     #[test]
@@ -202,19 +260,22 @@ mod tests {
         let actual = "\t1 \n  2  \n\n\n";
         let correct = "1\n2";
         assert!(
-            check_line_count(correct, actual) && check_lines(correct, actual)
+            check_line_count(correct, actual).is_correct()
+                && check_lines(correct, actual).is_correct()
         );
         let actual = "\t1 \n  2 3  \n\n\n";
         assert!(
-            check_line_count(correct, actual) && !check_lines(correct, actual)
+            check_line_count(correct, actual).is_correct()
+                && !check_lines(correct, actual).is_correct()
         );
         let actual = "\t1 \n  2\n3  \n\n\n";
-        assert!(!check_line_count(correct, actual));
+        assert!(!check_line_count(correct, actual).is_correct());
 
         let correct = "1\n\n\n2";
         let actual = "1\n2";
         assert!(
-            check_line_count(correct, actual) && check_lines(correct, actual)
+            check_line_count(correct, actual).is_correct()
+                && check_lines(correct, actual).is_correct()
         );
     }
 }
