@@ -1,24 +1,17 @@
 use std::{
-    fs::File,
+    cmp::max,
+    io::Write,
+    os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
 };
 
 use anyhow::{anyhow, Context};
 use clap::Parser;
-use termion::color;
+use termion::{color, style};
 
 #[derive(Parser)]
 pub struct Args {
-    #[arg(
-        value_name = "FILE",
-        short,
-        long,
-        default_value = None,
-        help = "Map solution stdin to file"
-    )]
-    input_file: Option<PathBuf>,
-
     #[arg(
         value_name = "FILE",
         short,
@@ -28,107 +21,146 @@ pub struct Args {
     )]
     output_file: Option<PathBuf>,
 
-    #[arg(id = "answer", help = "Path to the file with correct output")]
-    answer_file: PathBuf,
+    #[arg(id = "TESTS", help = "Path to the file with test suite description")]
+    test_suite: PathBuf,
 
-    #[arg(id = "solution", help = "Command to run the solution")]
+    #[arg(id = "SOLUTION", help = "Command to run the solution")]
     solution_command: String,
 }
 
-#[derive(Debug)]
-enum LineCountCheckResult {
-    Correct,
-    Incorrect { expected: usize, actual: usize },
+enum SolutionAnswer<'a> {
+    Stdout(&'a str),
+    FromFile(String),
 }
 
-impl LineCountCheckResult {
-    pub fn is_correct(&self) -> bool {
+impl<'a> SolutionAnswer<'a> {
+    pub fn to_str(&self) -> &str {
         match self {
-            Self::Correct => true,
-            Self::Incorrect { .. } => false,
+            Self::Stdout(s) => s,
+            Self::FromFile(s) => s.trim(),
         }
     }
 }
 
 enum CheckResult {
     Correct,
-    Incorrect(String),
+    Incorrect { message: String },
+}
+
+struct Test<'a> {
+    input: &'a str,
+    answer: &'a str,
+}
+
+impl<'a> Test<'a> {
+    pub fn new(input: &'a str, answer: &'a str) -> Self {
+        Self { input, answer }
+    }
+
+    pub fn parse(s: &'a str) -> anyhow::Result<Test<'a>> {
+        let body = match s.strip_prefix("[input]\n") {
+            Some(stripped) => stripped,
+            None => return Err(anyhow!("`[input]` header is not present")),
+        };
+
+        let (input, answer) = match body.split_once("[answer]\n") {
+            Some((i, a)) => (i.trim(), a.trim()),
+            None => return Err(anyhow!("`[answer]` header is not present")),
+        };
+
+        Ok(Self::new(input, answer))
+    }
+
+    pub fn run(
+        self,
+        command: &str,
+        output_file: Option<&Path>,
+    ) -> anyhow::Result<()> {
+        let mut child = create_solution_command(command)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .with_context(|| "Couldn't spawn child process")?;
+
+        child
+            .stdin
+            .take()
+            .with_context(|| "Couldn't open child stdin")?
+            .write_all(self.input.as_bytes())
+            .with_context(|| "Couldn't write to child stdin")?;
+
+        let output = child
+            .wait_with_output()
+            .with_context(|| "could not read output of the solution")?;
+        check_if_solution_terminated_correctly(&output)?;
+
+        let raw_solution_answer = read_soultion_answer(&output, output_file)?;
+        let actual_answer = raw_solution_answer.to_str();
+
+        match check_lines(self.answer, actual_answer) {
+            CheckResult::Correct => {
+                println!(
+                    "{}{}Passed{}{}",
+                    style::Bold,
+                    color::Fg(color::Green),
+                    style::Reset,
+                    color::Fg(color::Reset)
+                )
+            }
+            CheckResult::Incorrect { message } => {
+                println!(
+                    "{}{}Wrong answer{}{}",
+                    style::Bold,
+                    color::Fg(color::Red),
+                    style::Reset,
+                    color::Fg(color::Reset)
+                );
+                print!("{}", message);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn parse_tests(source: &str) -> anyhow::Result<Vec<Test>> {
+    source
+        .split("[test]\n")
+        .filter(|test| !test.is_empty())
+        .map(Test::parse)
+        .collect()
 }
 
 pub fn run(args: Args) -> anyhow::Result<()> {
-    let solution_stdin = args
-        .input_file
-        .as_deref()
-        .map_or(Ok(Stdio::null()), create_solution_input_stream)?;
-
-    let correct_answer = std::fs::read_to_string(args.answer_file.as_path())
-        .with_context(|| {
+    let tests_source =
+        std::fs::read_to_string(&args.test_suite).with_context(|| {
             format!(
-                "could not read correct answer from `{}`",
-                args.answer_file.display()
+                "Couldn't read test suite description from `{}`",
+                args.test_suite.display()
             )
         })?;
-    let trimmed_correct_answer = correct_answer.trim();
+    let tests = parse_tests(&tests_source)?;
 
-    let solution_output = create_solution_command(&args.solution_command)
-        .stdin(solution_stdin)
-        .output()
-        .with_context(|| "could not read output of the solution".to_string())?;
-
-    if !solution_output.status.success() {
-        let solution_stderr = std::str::from_utf8(&solution_output.stderr)
-            .with_context(|| "failed to convert solution stderr to UTF-8")?;
-        return Err(anyhow!("Stderr:\n{}", solution_stderr)).with_context(
-            || "solution terminated with a non-zero exit code".to_string(),
-        );
-    }
-
-    let _solution_output_from_file: String;
-    let trimmed_actual_answer = if let Some(file) = args.output_file.as_deref()
-    {
-        _solution_output_from_file = std::fs::read_to_string(file)
-            .with_context(|| {
-                format!(
-                    "couldn't read solution output from `{}`",
-                    file.display()
-                )
-            })?;
-        _solution_output_from_file.trim()
-    } else {
-        std::str::from_utf8(&solution_output.stdout)
-            .with_context(|| "failed to convert solution output to UTF-8")?
-    };
-
-    let line_count_check_result =
-        check_line_count(trimmed_correct_answer, trimmed_actual_answer);
-    if let LineCountCheckResult::Incorrect { expected, actual } =
-        line_count_check_result
-    {
-        println!(
-            "{}Number of lines differs:{} expected {expected}, got {actual}",
-            color::Fg(color::Red),
-            color::Fg(color::Reset),
-        );
-    }
-
-    if line_count_check_result.is_correct() {
-        match check_lines(trimmed_correct_answer, trimmed_actual_answer) {
-            CheckResult::Correct => {
-                println!("The answer is correct",)
-            }
-            CheckResult::Incorrect(message) => {
-                println!("{}", message);
+    for (i, test) in tests.into_iter().enumerate() {
+        print!("{}Test {}: {}", style::Bold, i + 1, style::Reset);
+        match test
+            .run(args.solution_command.trim(), args.output_file.as_deref())
+        {
+            Ok(_) => {}
+            Err(err) => {
+                println!(
+                    "{}{}Error occured{}\n{}:",
+                    style::Bold,
+                    color::Fg(color::Red),
+                    style::Reset,
+                    err,
+                );
+                err.chain().skip(1).for_each(|cause| println!("{}", cause));
             }
         }
     }
 
     Ok(())
-}
-
-fn create_solution_input_stream(path: &Path) -> anyhow::Result<Stdio> {
-    File::open(path).map(Stdio::from).with_context(|| {
-        format!("could not read test input from `{}`", path.display())
-    })
 }
 
 fn create_solution_command(command: &str) -> std::process::Command {
@@ -140,6 +172,46 @@ fn create_solution_command(command: &str) -> std::process::Command {
     solution_command
 }
 
+fn check_if_solution_terminated_correctly(
+    output: &Output,
+) -> Result<(), anyhow::Error> {
+    if !output.status.success() {
+        let result = if let Some(libc::SIGSEGV) = output.status.signal() {
+            Err(anyhow!("Segmentation fault"))
+        } else {
+            let solution_stderr = std::str::from_utf8(&output.stderr)
+                .with_context(|| {
+                    "failed to convert solution stderr to UTF-8"
+                })?;
+            Err(anyhow!("{}", solution_stderr))
+        };
+
+        return result.with_context(|| {
+            "Solution terminated with a non-zero exit code".to_string()
+        });
+    }
+
+    Ok(())
+}
+
+fn read_soultion_answer<'a>(
+    output: &'a Output,
+    output_file: Option<&Path>,
+) -> anyhow::Result<SolutionAnswer<'a>> {
+    if let Some(file) = output_file {
+        let output = std::fs::read_to_string(file).with_context(|| {
+            format!("couldn't read solution output from `{}`", file.display())
+        })?;
+        Ok(SolutionAnswer::FromFile(output))
+    } else {
+        Ok(SolutionAnswer::Stdout(
+            std::str::from_utf8(&output.stdout)
+                .with_context(|| "failed to convert solution stdout to UTF-8")?
+                .trim(),
+        ))
+    }
+}
+
 fn trim_filter_non_empty(mut line: &str) -> Option<&str> {
     line = line.trim();
     if line.is_empty() {
@@ -149,49 +221,27 @@ fn trim_filter_non_empty(mut line: &str) -> Option<&str> {
     }
 }
 
-fn check_line_count(
-    correct_answer: &str,
-    actual_answer: &str,
-) -> LineCountCheckResult {
-    let correct_line_count = correct_answer
-        .lines()
-        .filter_map(trim_filter_non_empty)
-        .count();
-
-    let actual_line_count = actual_answer
-        .lines()
-        .filter_map(trim_filter_non_empty)
-        .count();
-
-    if correct_line_count != actual_line_count {
-        LineCountCheckResult::Incorrect {
-            expected: correct_line_count,
-            actual: actual_line_count,
-        }
-    } else {
-        LineCountCheckResult::Correct
-    }
-}
-
 fn check_lines(correct_answer: &str, actual_answer: &str) -> CheckResult {
     let mut message = String::new();
     let mut correct = true;
     let mut correct_lines =
         correct_answer.lines().filter_map(trim_filter_non_empty);
+    let mut actual_lines =
+        actual_answer.lines().filter_map(trim_filter_non_empty);
 
-    for (i, cur_line) in actual_answer
-        .lines()
-        .filter_map(trim_filter_non_empty)
-        .enumerate()
-    {
-        let cur_correct_line = correct_lines.next().unwrap();
+    let max_line_count =
+        max(correct_lines.clone().count(), actual_lines.clone().count());
+
+    for i in 1..=max_line_count {
+        let cur_line = actual_lines.next().unwrap_or("");
+        let cur_correct_line = correct_lines.next().unwrap_or("");
 
         if i + 1 < 10 {
             message.push_str("  ");
         } else if i + 1 < 100 {
             message.push(' ');
         }
-        message.push_str(&format!("{} ", i + 1));
+        message.push_str(&format!("{} ", i));
 
         if cur_line == cur_correct_line {
             message.push_str(&format!(
@@ -217,65 +267,6 @@ fn check_lines(correct_answer: &str, actual_answer: &str) -> CheckResult {
     if correct {
         CheckResult::Correct
     } else {
-        // pop the last newline character
-        message.pop();
-        CheckResult::Incorrect(message)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    impl CheckResult {
-        pub fn is_correct(&self) -> bool {
-            match self {
-                Self::Correct => true,
-                Self::Incorrect { .. } => false,
-            }
-        }
-    }
-
-    #[test]
-    fn line_count() {
-        let str1 = "1\n2";
-        let str2 = "1\n5";
-        let str3 = "1\n2\n3";
-
-        assert!(check_line_count(str1, str2).is_correct());
-        assert!(!check_line_count(str1, str3).is_correct());
-    }
-
-    #[test]
-    fn lines() {
-        let str1 = "1\n2";
-        let str2 = "1\n55";
-
-        assert!(check_lines(str1, str1).is_correct());
-        assert!(!check_lines(str1, str2).is_correct());
-    }
-
-    #[test]
-    fn extra_whitespace() {
-        let actual = "\t1 \n  2  \n\n\n";
-        let correct = "1\n2";
-        assert!(
-            check_line_count(correct, actual).is_correct()
-                && check_lines(correct, actual).is_correct()
-        );
-        let actual = "\t1 \n  2 3  \n\n\n";
-        assert!(
-            check_line_count(correct, actual).is_correct()
-                && !check_lines(correct, actual).is_correct()
-        );
-        let actual = "\t1 \n  2\n3  \n\n\n";
-        assert!(!check_line_count(correct, actual).is_correct());
-
-        let correct = "1\n\n\n2";
-        let actual = "1\n2";
-        assert!(
-            check_line_count(correct, actual).is_correct()
-                && check_lines(correct, actual).is_correct()
-        );
+        CheckResult::Incorrect { message }
     }
 }
