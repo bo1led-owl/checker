@@ -2,7 +2,7 @@ use std::{
     cmp::max,
     io::Write,
     os::unix::process::ExitStatusExt,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Command, Output, Stdio},
 };
 
@@ -12,34 +12,11 @@ use termion::{color, style};
 
 #[derive(Parser)]
 pub struct Args {
-    #[arg(
-        value_name = "FILE",
-        short,
-        long,
-        default_value = None,
-        help = "Read solution output from file",
-    )]
-    output_file: Option<PathBuf>,
-
     #[arg(id = "TESTS", help = "Path to the file with test suite description")]
     test_suite: PathBuf,
 
     #[arg(id = "SOLUTION", help = "Command to run the solution")]
     solution_command: String,
-}
-
-enum SolutionAnswer<'a> {
-    Stdout(&'a str),
-    FromFile(String),
-}
-
-impl<'a> SolutionAnswer<'a> {
-    pub fn to_str(&self) -> &str {
-        match self {
-            Self::Stdout(s) => s,
-            Self::FromFile(s) => s.trim(),
-        }
-    }
 }
 
 enum CheckResult {
@@ -56,82 +33,83 @@ impl<'a> Test<'a> {
     pub fn new(input: &'a str, answer: &'a str) -> Self {
         Self { input, answer }
     }
+}
 
-    pub fn parse(s: &'a str) -> anyhow::Result<Test<'a>> {
-        let body = match s.strip_prefix("[input]\n") {
-            Some(stripped) => stripped,
-            None => return Err(anyhow!("`[input]` header is not present")),
-        };
+fn parse_test(s: &str) -> anyhow::Result<Test> {
+    let body = match s.strip_prefix("[input]\n") {
+        Some(stripped) => stripped,
+        None => return Err(anyhow!("`[input]` header is not present")),
+    };
 
-        let (input, answer) = match body.split_once("[answer]\n") {
-            Some((i, a)) => (i.trim(), a.trim()),
-            None => return Err(anyhow!("`[answer]` header is not present")),
-        };
+    let (input, answer) = match body.split_once("[answer]\n") {
+        Some((i, a)) => (i.trim(), a.trim()),
+        None => return Err(anyhow!("`[answer]` header is not present")),
+    };
 
-        Ok(Self::new(input, answer))
-    }
-
-    pub fn run(
-        self,
-        command: &str,
-        output_file: Option<&Path>,
-    ) -> anyhow::Result<()> {
-        let mut child = create_solution_command(command)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .with_context(|| "Couldn't spawn child process")?;
-
-        child
-            .stdin
-            .take()
-            .with_context(|| "Couldn't open child stdin")?
-            .write_all(self.input.as_bytes())
-            .with_context(|| "Couldn't write to child stdin")?;
-
-        let output = child
-            .wait_with_output()
-            .with_context(|| "could not read output of the solution")?;
-        check_if_solution_terminated_correctly(&output)?;
-
-        let raw_solution_answer = read_soultion_answer(&output, output_file)?;
-        let actual_answer = raw_solution_answer.to_str();
-
-        match check_lines(self.answer, actual_answer) {
-            CheckResult::Correct => {
-                println!(
-                    "{}{}Passed{}{}",
-                    style::Bold,
-                    color::Fg(color::Green),
-                    style::Reset,
-                    color::Fg(color::Reset)
-                )
-            }
-            CheckResult::Incorrect { message } => {
-                println!(
-                    "{}{}Wrong answer{}{}",
-                    style::Bold,
-                    color::Fg(color::Red),
-                    style::Reset,
-                    color::Fg(color::Reset)
-                );
-                print!("{}", message);
-            }
-        }
-
-        Ok(())
-    }
+    Ok(Test::new(input, answer))
 }
 
 fn parse_tests(source: &str) -> anyhow::Result<Vec<Test>> {
     source
         .split("[test]\n")
         .filter(|test| !test.is_empty())
-        .map(Test::parse)
+        .map(parse_test)
         .collect()
 }
 
+fn run_test(test: Test, command: &str) -> anyhow::Result<()> {
+    let mut child = create_solution_command(command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .with_context(|| "Couldn't spawn child process")?;
+
+    child
+        .stdin
+        .take()
+        .with_context(|| "Couldn't open child stdin")?
+        .write_all(test.input.as_bytes())
+        .with_context(|| "Couldn't write to child stdin")?;
+
+    let output = child
+        .wait_with_output()
+        .with_context(|| "could not read output of the solution")?;
+    report_if_solution_terminated_correctly(&output)?;
+
+    let actual_answer = std::str::from_utf8(&output.stdout)
+        .with_context(|| "failed to convert solution stdout to UTF-8")?
+        .trim();
+
+    match check_lines(test.answer, actual_answer) {
+        CheckResult::Correct => {
+            println!(
+                "{}{}Passed{}{}",
+                style::Bold,
+                color::Fg(color::Green),
+                style::Reset,
+                color::Fg(color::Reset)
+            )
+        }
+        CheckResult::Incorrect { message } => {
+            println!(
+                "{}{}Wrong answer{}{}",
+                style::Bold,
+                color::Fg(color::Red),
+                style::Reset,
+                color::Fg(color::Reset)
+            );
+            print!("{message}");
+        }
+    }
+
+    Ok(())
+}
+
 pub fn run(args: Args) -> anyhow::Result<()> {
+    if args.solution_command.is_empty() {
+        return Err(anyhow!("Empty solution command provided"));
+    }
+
     let tests_source =
         std::fs::read_to_string(&args.test_suite).with_context(|| {
             format!(
@@ -143,18 +121,16 @@ pub fn run(args: Args) -> anyhow::Result<()> {
 
     for (i, test) in tests.into_iter().enumerate() {
         print!("{}Test {}: {}", style::Bold, i + 1, style::Reset);
-        match test
-            .run(args.solution_command.trim(), args.output_file.as_deref())
-        {
+        match run_test(test, args.solution_command.trim()) {
             Ok(_) => {}
             Err(err) => {
                 println!(
-                    "{}{}Error occured{}\n{}:",
+                    "{}{}Error occured{}",
                     style::Bold,
                     color::Fg(color::Red),
                     style::Reset,
-                    err,
                 );
+                println!("{err}:");
                 err.chain().skip(1).for_each(|cause| println!("{}", cause));
             }
         }
@@ -172,44 +148,26 @@ fn create_solution_command(command: &str) -> std::process::Command {
     solution_command
 }
 
-fn check_if_solution_terminated_correctly(
+fn report_if_solution_terminated_correctly(
     output: &Output,
 ) -> Result<(), anyhow::Error> {
-    if !output.status.success() {
-        let result = if let Some(libc::SIGSEGV) = output.status.signal() {
-            Err(anyhow!("Segmentation fault"))
-        } else {
-            let solution_stderr = std::str::from_utf8(&output.stderr)
-                .with_context(|| {
-                    "failed to convert solution stderr to UTF-8"
-                })?;
-            Err(anyhow!("{}", solution_stderr))
-        };
-
-        return result.with_context(|| {
-            "Solution terminated with a non-zero exit code".to_string()
-        });
+    if output.status.success() {
+        return Ok(());
     }
 
-    Ok(())
-}
-
-fn read_soultion_answer<'a>(
-    output: &'a Output,
-    output_file: Option<&Path>,
-) -> anyhow::Result<SolutionAnswer<'a>> {
-    if let Some(file) = output_file {
-        let output = std::fs::read_to_string(file).with_context(|| {
-            format!("couldn't read solution output from `{}`", file.display())
-        })?;
-        Ok(SolutionAnswer::FromFile(output))
+    if let Some(libc::SIGSEGV) = output.status.signal() {
+        Err(anyhow!("Segmentation fault"))
     } else {
-        Ok(SolutionAnswer::Stdout(
-            std::str::from_utf8(&output.stdout)
-                .with_context(|| "failed to convert solution stdout to UTF-8")?
-                .trim(),
+        Err(anyhow!(
+            "{}",
+            std::str::from_utf8(&output.stderr).with_context(|| {
+                "failed to convert solution stderr to UTF-8"
+            })?
         ))
     }
+    .with_context(|| {
+        "Solution terminated with a non-zero exit code".to_string()
+    })
 }
 
 fn trim_filter_non_empty(mut line: &str) -> Option<&str> {
@@ -236,29 +194,28 @@ fn check_lines(correct_answer: &str, actual_answer: &str) -> CheckResult {
         let cur_line = actual_lines.next().unwrap_or("");
         let cur_correct_line = correct_lines.next().unwrap_or("");
 
+        let mut cur_line_number_formatted = String::new();
         if i + 1 < 10 {
-            message.push_str("  ");
+            cur_line_number_formatted.push_str("  ");
         } else if i + 1 < 100 {
-            message.push(' ');
+            cur_line_number_formatted.push(' ');
         }
-        message.push_str(&format!("{} ", i));
+        cur_line_number_formatted.push_str(&format!("{i} "));
 
         if cur_line == cur_correct_line {
-            message.push_str(&format!(
-                "{} {} {}\n",
-                color::Bg(color::Green),
-                cur_line,
-                color::Bg(color::Reset)
-            ));
+            // message.push_str(&format!(
+            //     "{} {cur_line} {}\n",
+            //     color::Bg(color::Green),
+            //     color::Bg(color::Reset)
+            // ));
         } else {
             correct = false;
             message.push_str(&format!(
-                "{} {} {} => expected {} {} {}\n",
+                "{} {} {cur_line} {} => expected {} {cur_correct_line} {}\n",
+                cur_line_number_formatted,
                 color::Bg(color::Red),
-                cur_line,
                 color::Bg(color::Reset),
                 color::Bg(color::Green),
-                cur_correct_line,
                 color::Bg(color::Reset)
             ));
         }
