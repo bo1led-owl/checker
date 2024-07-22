@@ -179,6 +179,15 @@ fn trim_filter_non_empty(mut line: &str) -> Option<&str> {
     }
 }
 
+fn get_integer_length(mut n: usize) -> usize {
+    let mut result = 0;
+    while n > 0 {
+        n /= 10;
+        result += 1;
+    }
+    return result;
+}
+
 fn check_lines(correct_answer: &str, actual_answer: &str) -> CheckResult {
     let mut message = String::new();
     let mut correct = true;
@@ -190,16 +199,19 @@ fn check_lines(correct_answer: &str, actual_answer: &str) -> CheckResult {
     let max_line_count =
         max(correct_lines.clone().count(), actual_lines.clone().count());
 
+    let max_line_number_len = get_integer_length(max_line_count);
+
     for i in 1..=max_line_count {
         let cur_line = actual_lines.next().unwrap_or("");
         let cur_correct_line = correct_lines.next().unwrap_or("");
 
         let mut cur_line_number_formatted = String::new();
-        if i + 1 < 10 {
-            cur_line_number_formatted.push_str("  ");
-        } else if i + 1 < 100 {
+
+        // offset line numbers to appear evenly
+        for _ in 0..max_line_number_len {
             cur_line_number_formatted.push(' ');
         }
+
         cur_line_number_formatted.push_str(&format!("{i} "));
 
         if cur_line == cur_correct_line {
