@@ -57,7 +57,7 @@ fn parse_tests(source: &str) -> anyhow::Result<Vec<Test>> {
         .collect()
 }
 
-fn run_test(test: Test, command: &str) -> anyhow::Result<()> {
+fn run_test<'a>(test: Test<'a>, command: &str) -> anyhow::Result<()> {
     let mut child = create_solution_command(command)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -139,7 +139,7 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn create_solution_command(command: &str) -> std::process::Command {
+fn create_solution_command(command: &str) -> Command {
     let mut solution_splitted = command.split_whitespace();
     let mut solution_command = Command::new(solution_splitted.next().unwrap());
     let solution_args = solution_splitted;
@@ -214,13 +214,7 @@ fn check_lines(correct_answer: &str, actual_answer: &str) -> CheckResult {
 
         cur_line_number_formatted.push_str(&format!("{i} "));
 
-        if cur_line == cur_correct_line {
-            // message.push_str(&format!(
-            //     "{} {cur_line} {}\n",
-            //     color::Bg(color::Green),
-            //     color::Bg(color::Reset)
-            // ));
-        } else {
+        if cur_line != cur_correct_line {
             correct = false;
             message.push_str(&format!(
                 "{} {} {cur_line} {} => expected {} {cur_correct_line} {}\n",
