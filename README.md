@@ -2,7 +2,7 @@
 A little checker for competitive programming solutions
 
 ## Usage
-Then to run tests use `run` command:
+To run tests use `run` command:
 
     checker run ./solution # for executable without arguments
     checker run "python solution.py" # for more complex commands
