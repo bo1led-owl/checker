@@ -2,11 +2,22 @@
 A little checker for competitive programming solutions
 
 ## Usage
-    checker [OPTIONS] <TESTS> <SOLUTION>
+Then to run tests use `run` command:
 
-To see detailed options use:
+    checker run ./solution # for executable without arguments
+    checker run "python solution.py" # for more complex commands
 
-    checker --help
+To add a test use `add-test` (the first argument is input, the second one is the answer):
+
+    checker add-test "1 2" "3"
+
+To clear the test suite use `clear-tests`:
+
+    checker clear-tests
+
+By default, test suite is stored in `./tests`, but this behaivour can be overridden by specifying the path after `-t` or `--test-suite`
+
+For more details use `checker help` or `checker --help`
 
 ## Test suite description syntax
 A test is described after `[test]` header, its input - after `[input]` header and the answer - after `[answer]` header. Both input and answer can be multiline.
