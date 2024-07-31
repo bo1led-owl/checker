@@ -15,7 +15,7 @@ To clear the test suite use `clear-tests`:
 
     checker clear-tests
 
-By default, test suite is stored in `./tests`, but this behaivour can be overridden by specifying the path after `-t` or `--test-suite`
+By default, test suite is stored in `./tests`, but this behaivour can be overridden by specifying the path after `--test-suite`
 
 For more details use `checker help` or `checker --help`
 

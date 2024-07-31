@@ -7,7 +7,6 @@ use termion::{color, style};
 #[derive(Parser)]
 pub struct Args {
     #[arg(
-        short,
         long,
         help = "Path to the file with test suite description",
         default_value = "tests"
