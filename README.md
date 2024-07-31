@@ -7,7 +7,7 @@ Then to run tests use `run` command:
     checker run ./solution # for executable without arguments
     checker run "python solution.py" # for more complex commands
 
-To add a test use `add-test` (the first argument is input, the second one is the answer):
+To add a test use `add-test` (the first argument is the input, the second one is the answer):
 
     checker add-test "1 2" "3"
 
