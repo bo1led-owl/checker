@@ -1,6 +1,7 @@
-use std::path::PathBuf;
+use std::{io::Write, path::PathBuf};
 
 use anyhow::{anyhow, Context};
+use checker::Test;
 use clap::{Parser, Subcommand};
 use termion::{color, style};
 
@@ -59,30 +60,46 @@ fn run(test_suite: String, solution_command: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn add_test(mut test_suite: String, input: &str, answer: &str) -> String {
-    test_suite.push_str(&format!("{}", checker::Test { input, answer }));
-    return test_suite;
-}
-
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let mut tests = std::fs::read_to_string(&args.test_suite).with_context(|| {
-        format!(
-            "Couldn't read test suite description from `{}`",
-            args.test_suite.display()
-        )
-    })?;
-
     match args.command {
-        Command::Run { solution_command } => run(tests, solution_command),
-        Command::AddTest { input, answer } => {
-            tests = add_test(tests, &input, &answer);
-            std::fs::write(&args.test_suite, tests).with_context(|| {
-                format!("Failed to write tests into `{}`", args.test_suite.display())
-            })
+        Command::Run { solution_command } => {
+            let tests = std::fs::read_to_string(&args.test_suite).with_context(|| {
+                format!(
+                    "Couldn't read test suite description from `{}`",
+                    args.test_suite.display()
+                )
+            })?;
+
+            run(tests, solution_command)
         }
-        Command::ClearTests => std::fs::write(&args.test_suite, "")
-            .with_context(|| format!("Failed to write into `{}`", args.test_suite.display())),
+        Command::AddTest { input, answer } => {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .append(true)
+                .create(true)
+                .open(&args.test_suite)
+                .with_context(|| format!("Error opening `{}`", args.test_suite.display()))?;
+
+            file.write_all(
+                format!(
+                    "{}",
+                    Test {
+                        input: &input,
+                        answer: &answer
+                    }
+                )
+                .as_bytes(),
+            )
+            .with_context(|| format!("Failed to write tests into `{}`", args.test_suite.display()))
+        }
+        Command::ClearTests => std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&args.test_suite)
+            .map(|_| ())
+            .with_context(|| format!("Error opening `{}`", args.test_suite.display())),
     }
 }
