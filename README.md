@@ -11,7 +11,7 @@ To see detailed options use:
 ## Test suite description syntax
 A test is described after `[test]` header, its input - after `[input]` header and the answer - after `[answer]` header. Both input and answer can be multiline.
 
-For example, if the solution takes two integers and prints their sum, the test suite can be described as such:
+For example, if the solution takes two integers and prints their sum, the test suite can be described like this:
 
     [test]
     [input]

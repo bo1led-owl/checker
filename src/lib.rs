@@ -2,36 +2,37 @@ use std::{
     cmp::max,
     io::Write,
     os::unix::process::ExitStatusExt,
-    path::PathBuf,
-    process::{Command, Output},
+    process::{self, Output, Stdio},
 };
 
 use anyhow::{anyhow, Context};
-use clap::Parser;
 use termion::{color, style};
 
-#[derive(Parser)]
-pub struct Args {
-    #[arg(id = "TESTS", help = "Path to the file with test suite description")]
-    test_suite: PathBuf,
-
-    #[arg(id = "SOLUTION", help = "Command to run the solution")]
-    solution_command: String,
-}
-
-enum CheckResult {
-    Correct,
-    Incorrect { message: String },
-}
-
-struct Test<'a> {
-    input: &'a str,
-    answer: &'a str,
+pub struct Test<'a> {
+    pub input: &'a str,
+    pub answer: &'a str,
 }
 
 impl<'a> Test<'a> {
     pub fn new(input: &'a str, answer: &'a str) -> Self {
         Self { input, answer }
+    }
+}
+
+impl<'a> std::fmt::Display for Test<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[test]\n[input]\n{}{}[answer]\n{}{}",
+            self.input,
+            if self.input.ends_with('\n') { "" } else { "\n" },
+            self.answer,
+            if self.answer.ends_with('\n') {
+                ""
+            } else {
+                "\n"
+            },
+        )
     }
 }
 
@@ -49,7 +50,7 @@ fn parse_test(s: &str) -> anyhow::Result<Test> {
     Ok(Test::new(input, answer))
 }
 
-fn parse_tests(source: &str) -> anyhow::Result<Vec<Test>> {
+pub fn parse_tests(source: &str) -> anyhow::Result<Vec<Test>> {
     source
         .split("[test]\n")
         .filter(|test| !test.is_empty())
@@ -57,8 +58,15 @@ fn parse_tests(source: &str) -> anyhow::Result<Vec<Test>> {
         .collect()
 }
 
-fn run_test<'a>(test: Test<'a>, command: &str) -> anyhow::Result<()> {
+enum CheckResult {
+    Correct,
+    Incorrect { message: String },
+}
+
+pub fn run_test<'a>(test: Test<'a>, command: &str) -> anyhow::Result<()> {
     let mut child = create_solution_command(command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
         .spawn()
         .with_context(|| "Couldn't spawn child process")?;
 
@@ -78,7 +86,7 @@ fn run_test<'a>(test: Test<'a>, command: &str) -> anyhow::Result<()> {
         .with_context(|| "failed to convert solution stdout to UTF-8")?
         .trim();
 
-    match check_lines(test.answer, actual_answer) {
+    match check_output(test.answer, actual_answer) {
         CheckResult::Correct => {
             println!(
                 "{}{}Passed{}{}",
@@ -103,52 +111,16 @@ fn run_test<'a>(test: Test<'a>, command: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn run(args: Args) -> anyhow::Result<()> {
-    if args.solution_command.is_empty() {
-        return Err(anyhow!("Empty solution command provided"));
-    }
-
-    let tests_source =
-        std::fs::read_to_string(&args.test_suite).with_context(|| {
-            format!(
-                "Couldn't read test suite description from `{}`",
-                args.test_suite.display()
-            )
-        })?;
-    let tests = parse_tests(&tests_source)?;
-
-    for (i, test) in tests.into_iter().enumerate() {
-        print!("{}Test {}: {}", style::Bold, i + 1, style::Reset);
-        match run_test(test, args.solution_command.trim()) {
-            Ok(_) => {}
-            Err(err) => {
-                println!(
-                    "{}{}Error occured{}",
-                    style::Bold,
-                    color::Fg(color::Red),
-                    style::Reset,
-                );
-                println!("{err}:");
-                err.chain().skip(1).for_each(|cause| println!("{}", cause));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn create_solution_command(command: &str) -> Command {
+fn create_solution_command(command: &str) -> process::Command {
     let mut solution_splitted = command.split_whitespace();
-    let mut solution_command = Command::new(solution_splitted.next().unwrap());
+    let mut solution_command = process::Command::new(solution_splitted.next().unwrap());
     let solution_args = solution_splitted;
     solution_command.args(solution_args);
 
     solution_command
 }
 
-fn report_if_solution_terminated_correctly(
-    output: &Output,
-) -> Result<(), anyhow::Error> {
+fn report_if_solution_terminated_correctly(output: &Output) -> Result<(), anyhow::Error> {
     if output.status.success() {
         return Ok(());
     }
@@ -158,14 +130,11 @@ fn report_if_solution_terminated_correctly(
     } else {
         Err(anyhow!(
             "{}",
-            std::str::from_utf8(&output.stderr).with_context(|| {
-                "failed to convert solution stderr to UTF-8"
-            })?
+            std::str::from_utf8(&output.stderr)
+                .with_context(|| { "failed to convert solution stderr to UTF-8" })?
         ))
     }
-    .with_context(|| {
-        "Solution terminated with a non-zero exit code".to_string()
-    })
+    .with_context(|| "Solution terminated with a non-zero exit code".to_string())
 }
 
 fn trim_filter_non_empty(mut line: &str) -> Option<&str> {
@@ -186,16 +155,13 @@ fn get_integer_length(mut n: usize) -> usize {
     return result;
 }
 
-fn check_lines(correct_answer: &str, actual_answer: &str) -> CheckResult {
+fn check_output(correct_answer: &str, actual_answer: &str) -> CheckResult {
     let mut message = String::new();
     let mut correct = true;
-    let mut correct_lines =
-        correct_answer.lines().filter_map(trim_filter_non_empty);
-    let mut actual_lines =
-        actual_answer.lines().filter_map(trim_filter_non_empty);
+    let mut correct_lines = correct_answer.lines().filter_map(trim_filter_non_empty);
+    let mut actual_lines = actual_answer.lines().filter_map(trim_filter_non_empty);
 
-    let max_line_count =
-        max(correct_lines.clone().count(), actual_lines.clone().count());
+    let max_line_count = max(correct_lines.clone().count(), actual_lines.clone().count());
 
     let max_line_number_len = get_integer_length(max_line_count);
 
