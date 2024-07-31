@@ -3,7 +3,7 @@ use std::{
     io::Write,
     os::unix::process::ExitStatusExt,
     path::PathBuf,
-    process::{Command, Output, Stdio},
+    process::{Command, Output},
 };
 
 use anyhow::{anyhow, Context};
@@ -59,8 +59,6 @@ fn parse_tests(source: &str) -> anyhow::Result<Vec<Test>> {
 
 fn run_test<'a>(test: Test<'a>, command: &str) -> anyhow::Result<()> {
     let mut child = create_solution_command(command)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
         .spawn()
         .with_context(|| "Couldn't spawn child process")?;
 
