@@ -1,7 +1,7 @@
 use std::{io::Write, path::PathBuf};
 
 use anyhow::{anyhow, Context};
-use checker::Test;
+use checker;
 use clap::{Parser, Subcommand};
 use termion::{color, style};
 
@@ -29,6 +29,10 @@ enum Command {
         input: String,
         #[arg(id = "ANSWER", help = "Expected output")]
         answer: String,
+    },
+    ShowTest {
+        #[arg(id = "N", help = "The number of a test to show")]
+        n: std::num::NonZeroU32,
     },
     ClearTests,
 }
@@ -85,7 +89,7 @@ fn main() -> anyhow::Result<()> {
             file.write_all(
                 format!(
                     "{}",
-                    Test {
+                    checker::Test {
                         input: &input,
                         answer: &answer
                     }
@@ -93,6 +97,22 @@ fn main() -> anyhow::Result<()> {
                 .as_bytes(),
             )
             .with_context(|| format!("Failed to write tests into `{}`", args.test_suite.display()))
+        }
+        Command::ShowTest { n } => {
+            let tests_src = std::fs::read_to_string(&args.test_suite).with_context(|| {
+                format!(
+                    "Couldn't read test suite description from `{}`",
+                    args.test_suite.display()
+                )
+            })?;
+
+            let tests = checker::parse_tests(&tests_src)?;
+            if n.get() as usize > tests.len() {
+                eprintln!("N is too great, only {} tests are present", tests.len());
+            } else {
+                println!("{}", tests[(n.get() - 1) as usize]);
+            }
+            Ok(())
         }
         Command::ClearTests => std::fs::OpenOptions::new()
             .write(true)

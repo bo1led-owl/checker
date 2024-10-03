@@ -15,7 +15,10 @@ pub struct Test<'a> {
 
 impl<'a> Test<'a> {
     pub fn new(input: &'a str, answer: &'a str) -> Self {
-        Self { input, answer }
+        Self {
+            input: input.trim(),
+            answer: answer.trim(),
+        }
     }
 }
 
@@ -23,15 +26,8 @@ impl<'a> std::fmt::Display for Test<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "[test]\n[input]\n{}{}[answer]\n{}{}",
-            self.input,
-            if self.input.ends_with('\n') { "" } else { "\n" },
-            self.answer,
-            if self.answer.ends_with('\n') {
-                ""
-            } else {
-                "\n"
-            },
+            "[test]\n[input]\n{}\n[answer]\n{}",
+            self.input, self.answer,
         )
     }
 }
