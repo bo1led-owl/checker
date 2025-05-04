@@ -26,21 +26,21 @@ impl<'a> std::fmt::Display for Test<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "[test]\n[input]\n{}\n[answer]\n{}",
+            "[test]\n[in]\n{}\n[out]\n{}",
             self.input, self.answer,
         )
     }
 }
 
 fn parse_test(s: &str) -> anyhow::Result<Test> {
-    let body = match s.strip_prefix("[input]\n") {
+    let body = match s.strip_prefix("[in]\n") {
         Some(stripped) => stripped,
-        None => return Err(anyhow!("`[input]` header is not present")),
+        None => return Err(anyhow!("`[in]` header is not present")),
     };
 
-    let (input, answer) = match body.split_once("[answer]\n") {
+    let (input, answer) = match body.split_once("[out]\n") {
         Some((i, a)) => (i.trim(), a.trim()),
-        None => return Err(anyhow!("`[answer]` header is not present")),
+        None => return Err(anyhow!("`[out]` header is not present")),
     };
 
     Ok(Test::new(input, answer))

@@ -20,24 +20,24 @@ By default, test suite is stored in `./tests`, but this behaivour can be overrid
 For more details use `checker help` or `checker --help`
 
 ## Test suite description syntax
-A test is described after `[test]` header, its input - after `[input]` header and the answer - after `[answer]` header. Both input and answer can be multiline.
+A test is described after `[test]` header, its input - after `[in]` header and the answer - after `[out]` header. Both input and answer can be multiline.
 
 For example, if the solution takes two integers and prints their sum, the test suite can be described like this:
 
     [test]
-    [input]
+    [in]
     1 2
-    [answer]
+    [out]
     3
     
     [test]
-    [input]
+    [in]
     7 2
-    [answer]
+    [out]
     9
 
     [test]
-    [input]
+    [in]
     16 16
-    [answer]
+    [out]
     32
